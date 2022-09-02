@@ -158,7 +158,7 @@ class TrainedAttacker(object):
           n_jobs=self.n_jobs)
       logging.info('Using %s backend for training.', backend)
 
-  def train_model(self, input_features, is_training_labels):
+  def train_model(self, input_features, is_training_labels, sample_weight=None):
     """Train an attacker model.
 
     This is trained on examples from train and test datasets.
@@ -168,6 +168,10 @@ class TrainedAttacker(object):
         number of features.
       is_training_labels : a vector of booleans of shape (n_samples, )
         representing whether the sample is in the training set or not.
+      sample_weight: a vector of weights of shape (n_samples, ) that are
+        assigned to individual samples. If not provided, then each sample is
+        given unit weight. Only the LogisticRegressionAttacker and the
+        RandomForestAttacker support sample weights.
     """
     raise NotImplementedError()
 
@@ -193,7 +197,7 @@ class LogisticRegressionAttacker(TrainedAttacker):
   def __init__(self, backend: Optional[str] = None):
     super().__init__(backend=backend)
 
-  def train_model(self, input_features, is_training_labels):
+  def train_model(self, input_features, is_training_labels, sample_weight=None):
     with self.ctx_mgr:
       lr = linear_model.LogisticRegression(solver='lbfgs', n_jobs=self.n_jobs)
       param_grid = {
@@ -201,7 +205,7 @@ class LogisticRegressionAttacker(TrainedAttacker):
       }
       model = model_selection.GridSearchCV(
           lr, param_grid=param_grid, cv=3, n_jobs=self.n_jobs, verbose=0)
-      model.fit(input_features, is_training_labels)
+      model.fit(input_features, is_training_labels, sample_weight=sample_weight)
     self.model = model
 
 
@@ -231,7 +235,7 @@ class RandomForestAttacker(TrainedAttacker):
   def __init__(self, backend: Optional[str] = None):
     super().__init__(backend=backend)
 
-  def train_model(self, input_features, is_training_labels):
+  def train_model(self, input_features, is_training_labels, sample_weight=None):
     """Setup a random forest pipeline with cross-validation."""
     with self.ctx_mgr:
       rf_model = ensemble.RandomForestClassifier(n_jobs=self.n_jobs)
@@ -240,12 +244,14 @@ class RandomForestAttacker(TrainedAttacker):
           'n_estimators': [100],
           'max_features': ['auto', 'sqrt'],
           'max_depth': [5, 10, 20, None],
-          'min_samples_split': [2, 5, 10],
-          'min_samples_leaf': [1, 2, 4]
+          # 'min_samples_split': [2, 5, 10],
+          # 'min_samples_leaf': [1, 2, 4],
+          'min_samples_split': [10],
+          'min_samples_leaf': [4]
       }
       model = model_selection.GridSearchCV(
           rf_model, param_grid=param_grid, cv=3, n_jobs=self.n_jobs, verbose=0)
-      model.fit(input_features, is_training_labels)
+      model.fit(input_features, is_training_labels, sample_weight=sample_weight)
     self.model = model
 
 

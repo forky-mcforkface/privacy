@@ -14,7 +14,7 @@
 """A hook and a function in tf estimator for membership inference attack."""
 
 import os
-from typing import Iterable
+from typing import Iterable, Optional
 
 from absl import logging
 import numpy as np
@@ -26,7 +26,10 @@ from tensorflow_privacy.privacy.privacy_tests.membership_inference_attack import
 from tensorflow_privacy.privacy.privacy_tests.membership_inference_attack import utils_tensorboard
 
 
-def calculate_losses(estimator, input_fn, labels):
+def calculate_losses(estimator,
+                     input_fn,
+                     labels,
+                     sample_weight: Optional[np.ndarray] = None):
   """Get predictions and losses for samples.
 
   The assumptions are 1) the loss is cross-entropy loss, and 2) user have
@@ -38,13 +41,17 @@ def calculate_losses(estimator, input_fn, labels):
     estimator: model to make prediction
     input_fn: input function to be used in estimator.predict
     labels: array of size (n_samples, ), true labels of samples (integer valued)
+    sample_weight: a vector of weights of shape (n_samples, ) that are
+      assigned to individual samples. If not provided, then each sample is
+      given unit weight. Only the LogisticRegressionAttacker and the
+      RandomForestAttacker support sample weights.
 
   Returns:
     preds: probability vector of each sample
     loss: cross entropy loss of each sample
   """
   pred = np.array(list(estimator.predict(input_fn=input_fn)))
-  loss = utils.log_loss(labels, pred)
+  loss = utils.log_loss(labels, pred, sample_weight=sample_weight)
   return pred, loss
 
 
@@ -137,7 +144,8 @@ def run_attack_on_tf_estimator_model(
 
   Args:
     estimator: model to be tested
-    in_train: (in_training samples, in_training labels)
+    in_train: (in_training samples, in_training labels,
+      in_training_sample_wts=None)
     out_train: (out_training samples, out_training labels)
     input_fn_constructor: a function that receives sample, label and construct
       the input_fn for model prediction
@@ -147,7 +155,11 @@ def run_attack_on_tf_estimator_model(
   Returns:
     Results of the attack
   """
-  in_train_data, in_train_labels = in_train
+  if len(in_train) == 2:
+    in_train_data, in_train_labels = in_train
+    in_train_sample_weights = None
+  elif len(in_train) == 3:
+    in_train_data, in_train_labels, in_train_sample_weights = in_train
   out_train_data, out_train_labels = out_train
 
   # Define the input functions for both in and out-training samples.
@@ -156,7 +168,8 @@ def run_attack_on_tf_estimator_model(
 
   # Call the helper to run the attack.
   results = run_attack_helper(estimator, in_train_input_fn, out_train_input_fn,
-                              in_train_labels, out_train_labels, slicing_spec,
+                              in_train_labels, out_train_labels,
+                              in_train_sample_weights, slicing_spec,
                               attack_types)
   logging.info('End of training attack:')
   logging.info(results)
@@ -168,6 +181,7 @@ def run_attack_helper(estimator,
                       out_train_input_fn,
                       in_train_labels,
                       out_train_labels,
+                      sample_weight: Optional[np.ndarray] = None,
                       slicing_spec: data_structures.SlicingSpec = None,
                       attack_types: Iterable[data_structures.AttackType] = (
                           data_structures.AttackType.THRESHOLD_ATTACK,)):
@@ -179,6 +193,10 @@ def run_attack_helper(estimator,
     out_train_input_fn: input_fn for out of training data
     in_train_labels: in training labels
     out_train_labels: out of training labels
+    sample_weight: a vector of weights of shape (n_samples, ) that are
+      assigned to individual samples. If not provided, then each sample is
+      given unit weight. Only the LogisticRegressionAttacker and the
+      RandomForestAttacker support sample weights.
     slicing_spec: slicing specification of the attack
     attack_types: a list of attacks, each of type AttackType
 
@@ -186,18 +204,21 @@ def run_attack_helper(estimator,
     Results of the attack
   """
   # Compute predictions and losses
-  in_train_pred, in_train_loss = calculate_losses(estimator, in_train_input_fn,
-                                                  in_train_labels)
-  out_train_pred, out_train_loss = calculate_losses(estimator,
-                                                    out_train_input_fn,
-                                                    out_train_labels)
+  in_train_pred, in_train_loss = calculate_losses(
+      estimator,
+      in_train_input_fn,
+      in_train_labels,
+      sample_weight=sample_weight)
+  out_train_pred, out_train_loss = calculate_losses(
+      estimator, out_train_input_fn, out_train_labels, sample_weight=None)
   attack_input = data_structures.AttackInputData(
       logits_train=in_train_pred,
       logits_test=out_train_pred,
       labels_train=in_train_labels,
       labels_test=out_train_labels,
       loss_train=in_train_loss,
-      loss_test=out_train_loss)
+      loss_test=out_train_loss,
+      sample_weight=sample_weight)
   results = mia.run_attacks(
       attack_input, slicing_spec=slicing_spec, attack_types=attack_types)
   return results
